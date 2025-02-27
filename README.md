@@ -25,7 +25,7 @@
 
 ---
 
-## 🎉 特 性
+## 🎉 Feature
 
 - 支持多种内置的数据结构
 - 支持数据安全 IP 白名单访问功能
@@ -36,21 +36,21 @@
 
 ---
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-使用容器管理工具可以快速部署 [`wiredb:latest`](https://hub.docker.com/r/auula/wiredb) 镜像来测试 WireDB 提供的服务。只需运行以下命令，即可拉取 WireDB 镜像并启动一个容器运行 WireDB 服务：
+使用 Docker 可以快速部署 [`wiredb:latest`](https://hub.docker.com/r/auula/wiredb) 的镜像来测试 WireDB 提供的服务。运行以下命令，即可拉取 WireDB 镜像：
 
 ```bash
 docker pull auula/wiredb:v1.0.0
 ```
 
-运行 WireDB 镜像启动容器服务并且映射端口到外部主机网络，如何下面命令：
+运行 WireDB 镜像启动容器服务，并且映射端口到外部主机网络，执行下面的命令：
 
 ```bash
 docker run -p 2668:2668 auula/wiredb:v1.0.0
 ```
 
-注意通过 RESTful API HTTP 协议操作数据时请在 HTTP 请求头中添加 `Auth-Token: xxxx` 访问密码。此默认访问密码为 WireDB 进程自动生成的，需要通过查看容器运行输出的日志信息获得，命令如下：
+WireDB 提供 RESTful API 数据交互服务，支持任意具备 HTTP 协议的客户端。调用 API 时，需要在请求头中添加 `Auth-Token` 进行认证。该密钥由 WireDB 进程自动生成，可通过容器运行时日志获取，使用以下命令查看启动日志：
 
 ```bash
 root@2c2m:~# docker logs 46ae91bc73a6
@@ -68,6 +68,29 @@ root@2c2m:~# docker logs 46ae91bc73a6
 [WIREDB:C] 2025/02/27 10:07:01 [INFO]	Region compression activated successfully
 [WIREDB:C] 2025/02/27 10:07:01 [INFO]	File system setup completed successfully
 [WIREDB:C] 2025/02/27 10:07:01 [INFO]	HTTP server started at http://172.0.0.1:2668 🚀
+```
+
+---
+
+## 🕹️ RESTful API 
+
+---
+
+## 🧪 Benchmark Test
+
+在项目根目录下有一个 [`tools.sh`](./tools.sh) 的 Unix 的脚本文件可以帮助快速完成测试工作。底层存储是以 Append-Only Log 的方式将所有的操作写入到数据文件中。
+
+运行测试代码的硬件设备配置信息为 CPU 为 2/i5-7360U 和内存 8GB/RAM (LPDDR3) ，核心文件系统 `vfs` 包的写入基准测试结果如下：
+
+```bash
+$: go test -benchmem -run=^$ -bench ^BenchmarkVFSWrite$ github.com/auula/wiredkv/vfs
+goos: darwin
+goarch: amd64
+pkg: github.com/auula/wiredkv/vfs
+cpu: Intel(R) Core(TM) i5-7360U CPU @ 2.30GHz
+BenchmarkVFSWrite-4   	  130216	      9682 ns/op	    1757 B/op	      44 allocs/op
+PASS
+ok  	github.com/auula/wiredkv/vfs	2.544s
 ```
 
 ---
