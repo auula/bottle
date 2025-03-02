@@ -28,7 +28,7 @@
 ## 🎉 Feature
 
 - 支持多种内置的数据结构
-- 支持数据安全 IP 白名单访问功能
+- 支持 IP 白名单功能安全数据的访问
 - 高吞吐量、低延迟、高效批量数据写入
 - 支持磁盘数据存储和磁盘垃圾数据回收
 - 支持磁盘数据静态加密和静态数据压缩
@@ -50,7 +50,7 @@ docker pull auula/wiredb:v1.0.0
 docker run -p 2668:2668 auula/wiredb:v1.0.0
 ```
 
-WireDB 提供 RESTful API 数据交互服务，支持任意具备 HTTP 协议的客户端。调用 API 时，需要在请求头中添加 `Auth-Token` 进行认证。该密钥由 WireDB 进程自动生成，可通过容器运行时日志获取，使用以下命令查看启动日志：
+WireDB 提供使用 RESTful API 的方式进行数据交互，理论上任意具备 HTTP 协议的客户端都支持访问和操作 WireDB 服务实例。在调用 RESTful API 时需要在请求头中添加 `Auth-Token` 进行鉴权，该密钥由 WireDB 进程自动生成，可通过容器运行时日志获取，使用以下命令查看启动日志：
 
 ```bash
 root@2c2m:~# docker logs 46ae91bc73a6
@@ -78,9 +78,7 @@ root@2c2m:~# docker logs 46ae91bc73a6
 
 ## 🧪 Benchmark Test
 
-在项目根目录下有一个 [`tools.sh`](./tools.sh) 的 Unix 的脚本文件可以帮助快速完成测试工作。底层存储是以 Append-Only Log 的方式将所有的操作写入到数据文件中。
-
-运行测试代码的硬件设备配置信息为 CPU 为 2/i5-7360U 和内存 8GB/RAM (LPDDR3) ，核心文件系统 `vfs` 包的写入基准测试结果如下：
+由于底层存储引擎是以 Append-Only Log 的方式将所有的操作写入到数据文件中，所以这里给出的测试用例报告，是针对的其核心文件系统 [`vfs`](./vfs/) 包的写入性能测试的结果。运行测试代码的硬件设备配置信息为（Intel i5-7360U, 8GB LPDDR3 RAM），写入基准测试结果如下：
 
 ```bash
 $: go test -benchmem -run=^$ -bench ^BenchmarkVFSWrite$ github.com/auula/wiredkv/vfs
@@ -92,6 +90,8 @@ BenchmarkVFSWrite-4   	  130216	      9682 ns/op	    1757 B/op	      44 allocs/o
 PASS
 ok  	github.com/auula/wiredkv/vfs	2.544s
 ```
+
+在项目根目录下有一个 [`tools.sh`](./tools.sh) 的工具脚本文件，可以快速帮助完成各项辅助工作。
 
 ---
 
