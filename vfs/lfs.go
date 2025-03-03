@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/auula/wiredkv/clog"
 	"github.com/auula/wiredkv/utils"
@@ -252,12 +253,16 @@ func (lfs *LogStructuredFS) UpdateSegmentWithCAS(key string, expected uint64, ne
 			return fmt.Errorf("failed to update data: %w", err)
 		}
 
-		// 修改 inode 信息时使用写锁
-		atomic.StoreUint64(&inode.Position, atomic.LoadUint64(&lfs.offset))
-		atomic.StoreUint64(&inode.CreatedAt, newseg.CreatedAt)
-		atomic.StoreUint64(&inode.ExpiredAt, newseg.ExpiredAt)
-		atomic.StoreUint64(&inode.RegionID, lfs.regionID)
-		atomic.StoreUint32(&inode.Length, newseg.Size())
+		newInode := &INode{
+			RegionID:  atomic.LoadUint64(&lfs.regionID),
+			Position:  atomic.LoadUint64(&lfs.offset),
+			CreatedAt: newseg.CreatedAt,
+			ExpiredAt: newseg.ExpiredAt,
+			Length:    newseg.Size(),
+		}
+
+		// 一次性原子更新 inode 指针
+		atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&inode)), unsafe.Pointer(newInode))
 
 		// 使用原子操作更新 offset
 		atomic.AddUint64(&lfs.offset, uint64(newseg.Size()))
