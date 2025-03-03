@@ -1,4 +1,4 @@
-module github.com/auula/wiredkv
+module github.com/auula/wiredb
 
 go 1.20
 
