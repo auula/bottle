@@ -30,10 +30,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/auula/wiredb/clog"
 	"github.com/auula/wiredb/utils"
+	"github.com/robfig/cron/v3"
 	"github.com/spaolacci/murmur3"
 )
 
@@ -78,7 +78,6 @@ type INode struct {
 	Length    uint32 // Data record length
 	ExpiredAt uint64 // Expiration time of the INode (UNIX timestamp in nano seconds)
 	CreatedAt uint64 // Creation time of the INode (UNIX timestamp in nano seconds)
-	mvcc      uint64 // Multi-version concurrency ID
 }
 
 type indexMap struct {
@@ -95,8 +94,8 @@ type LogStructuredFS struct {
 	indexs       []*indexMap
 	active       *os.File
 	regions      map[uint64]*os.File
+	cronJob      *cron.Cron
 	gcstate      GC_STATE
-	gcdone       chan struct{}
 	dirtyRegions []*os.File
 }
 
@@ -129,7 +128,6 @@ func (lfs *LogStructuredFS) PutSegment(key string, seg *Segment) error {
 		Length:    seg.Size(),
 		CreatedAt: seg.CreatedAt,
 		ExpiredAt: seg.ExpiredAt,
-		mvcc:      0,
 	}
 	imap.mu.Unlock()
 
@@ -148,7 +146,7 @@ func (lfs *LogStructuredFS) PutSegment(key string, seg *Segment) error {
 func (lfs *LogStructuredFS) BatchFetchSegments(keys ...string) ([]*Segment, error) {
 	var segs []*Segment
 	for _, key := range keys {
-		_, seg, err := lfs.FetchSegment(key)
+		seg, err := lfs.FetchSegment(key)
 		if err != nil {
 			return nil, err
 		}
@@ -187,40 +185,43 @@ func (lfs *LogStructuredFS) DeleteSegment(key string) error {
 	return nil
 }
 
-func (lfs *LogStructuredFS) FetchSegment(key string) (uint64, *Segment, error) {
+func (lfs *LogStructuredFS) FetchSegment(key string) (*Segment, error) {
 	inum := InodeNum(key)
 	imap := lfs.indexs[inum%uint64(indexShard)]
 	if imap == nil {
-		return 0, nil, fmt.Errorf("inode index shard for %d not found", inum)
+		return nil, fmt.Errorf("inode index shard for %d not found", inum)
 	}
 
 	imap.mu.RLock()
+	defer imap.mu.RUnlock()
+
 	inode, ok := imap.index[inum]
-	imap.mu.RUnlock()
 	if !ok {
-		return 0, nil, fmt.Errorf("inode index for %d not found", inum)
+		return nil, fmt.Errorf("inode index for %d not found", inum)
 	}
 
-	if atomic.LoadUint64(&inode.ExpiredAt) <= uint64(time.Now().UnixNano()) &&
-		atomic.LoadUint64(&inode.ExpiredAt) != 0 {
+	if inode.ExpiredAt <= uint64(time.Now().UnixNano()) && inode.ExpiredAt != 0 {
 		imap.mu.Lock()
 		delete(imap.index, inum)
 		imap.mu.Unlock()
-		return 0, nil, fmt.Errorf("inode index for %d has expired", inum)
+		return nil, fmt.Errorf("inode index for %d has expired", inum)
 	}
 
-	fd, ok := lfs.regions[atomic.LoadUint64(&inode.RegionID)]
+	lfs.mu.RLock()
+	defer lfs.mu.RUnlock()
+
+	fd, ok := lfs.regions[inode.RegionID]
 	if !ok {
-		return 0, nil, fmt.Errorf("data region with ID %d not found", inode.RegionID)
+		return nil, fmt.Errorf("data region with ID %d not found", inode.RegionID)
 	}
 
-	_, segment, err := readSegment(fd, atomic.LoadUint64(&inode.Position), SEGMENT_PADDING)
+	_, segment, err := readSegment(fd, inode.Position, SEGMENT_PADDING)
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to read segment: %w", err)
+		return nil, fmt.Errorf("failed to read segment: %w", err)
 	}
 
 	// Return the fetched segment and multi-version concurrency ID
-	return atomic.LoadUint64(&inode.mvcc), segment, nil
+	return segment, nil
 }
 
 func (lfs *LogStructuredFS) KeysCount() int {
@@ -238,7 +239,7 @@ func InodeNum(key string) uint64 {
 }
 
 // UpdateSegmentWithCAS 通过类似于 MVCC 来实现更新操作数据一致性
-func (lfs *LogStructuredFS) UpdateSegmentWithCAS(key string, expected uint64, newseg *Segment) error {
+func (lfs *LogStructuredFS) UpdateSegment(key string, newseg *Segment) error {
 	inum := InodeNum(key)
 	imap := lfs.indexs[inum%uint64(indexShard)]
 	if imap == nil {
@@ -246,55 +247,50 @@ func (lfs *LogStructuredFS) UpdateSegmentWithCAS(key string, expected uint64, ne
 	}
 
 	// 读取 inode 信息，使用读锁来防止并发写操作
-	imap.mu.RLock()
+	imap.mu.Lock()
 	inode, ok := imap.index[inum]
-	imap.mu.RUnlock()
+	imap.mu.Unlock()
+
 	if !ok {
 		return fmt.Errorf("inode index for %d not found", inum)
 	}
 
-	// MVCC: version is not modified by another thread
-	if atomic.CompareAndSwapUint64(&inode.mvcc, expected, expected+1) {
-		bytes, err := serializedSegment(newseg)
+	bytes, err := serializedSegment(newseg)
+	if err != nil {
+		return err
+	}
+
+	// 更新数据时使用锁
+	lfs.mu.Lock()
+	err = appendToActiveRegion(lfs.active, bytes)
+	lfs.mu.Unlock()
+
+	if err != nil {
+		return fmt.Errorf("failed to update data: %w", err)
+	}
+
+	// 基于原有的 inode 更新索引元数据
+	imap.mu.Lock()
+	inode.RegionID = atomic.LoadUint64(&lfs.regionID)
+	inode.Position = atomic.LoadUint64(&lfs.offset)
+	inode.CreatedAt = newseg.CreatedAt
+	inode.ExpiredAt = newseg.ExpiredAt
+	inode.Length = newseg.Size()
+	imap.mu.Unlock()
+
+	atomic.AddUint64(&lfs.offset, uint64(newseg.Size()))
+
+	// 检查并创建新的区域
+	if atomic.LoadUint64(&lfs.offset) >= uint64(regionThreshold) {
+		lfs.mu.Lock()
+		err := lfs.createActiveRegion()
+		lfs.mu.Unlock()
 		if err != nil {
 			return err
 		}
-		// 更新数据时使用锁
-		lfs.mu.Lock()
-		err = appendToActiveRegion(lfs.active, bytes)
-		lfs.mu.Unlock()
-		if err != nil {
-			return fmt.Errorf("failed to update data: %w", err)
-		}
-
-		newInode := &INode{
-			RegionID:  atomic.LoadUint64(&lfs.regionID),
-			Position:  atomic.LoadUint64(&lfs.offset),
-			CreatedAt: newseg.CreatedAt,
-			ExpiredAt: newseg.ExpiredAt,
-			Length:    newseg.Size(),
-		}
-
-		// 一次性原子更新 inode 指针
-		atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&inode)), unsafe.Pointer(newInode))
-
-		// 使用原子操作更新 offset
-		atomic.AddUint64(&lfs.offset, uint64(newseg.Size()))
-
-		// 检查并创建新的区域
-		if atomic.LoadUint64(&lfs.offset) >= uint64(regionThreshold) {
-			lfs.mu.Lock()
-			err := lfs.createActiveRegion()
-			lfs.mu.Unlock()
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
 	}
 
-	return errors.New("failed to update data due to version conflict")
+	return nil
 }
 
 func (lfs *LogStructuredFS) changeRegions() error {
@@ -456,55 +452,54 @@ func (lfs *LogStructuredFS) SetEncryptor(encryptor Encryptor, secret []byte) err
 	return transformer.SetEncryptor(encryptor, secret)
 }
 
-func (lfs *LogStructuredFS) StartRegionGC(cycle_second time.Duration) {
-	// Return if the garbage collector is not in the initial state.
+// StartRegionGC 使用 robfig/cron 调度垃圾回收
+func (lfs *LogStructuredFS) StartRegionGC(schedule string) {
+	// 确保垃圾回收处于初始状态
 	if lfs.gcstate != GC_INIT {
 		return
 	}
 
-	// Create a ticker that triggers at the specified interval.
-	ticker := time.NewTicker(cycle_second)
-	// Channel to control the graceful exit of the garbage collection goroutine.
-	lfs.gcdone = make(chan struct{}, 1)
+	// 初始化 cron 任务，支持秒级调度
+	lfs.cronJob = cron.New(cron.WithSeconds())
 
-	// Start a goroutine to continuously receive messages from the ticker channel.
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				// Skip this cycle if the previous garbage collection is still running.
-				if lfs.gcstate == GC_ACTIVE {
-					continue
-				}
-
-				// Execute the garbage collection logic.
-				err := lfs.cleanupDirtyRegions()
-				if err != nil {
-					clog.Warnf("failed to compress dirty region: %s", err)
-				}
-
-				// Update the state to indicate garbage collection has stopped.
-				lfs.gcstate = GC_INACTIVE
-			case <-lfs.gcdone:
-				// If garbage collection is running, delay its exit to prevent dirty data
-				// From being generated due to interrupted operations.
-				for lfs.gcstate == GC_ACTIVE {
-					time.Sleep(3 * time.Second)
-				}
-				// Reset the garbage collector state to the initial state.
-				lfs.gcstate = GC_INIT
-				return
-			}
+	// 添加定时任务
+	lfs.cronJob.AddFunc(schedule, func() {
+		// 如果上一次 GC 仍在运行，则跳过
+		if lfs.gcstate == GC_ACTIVE {
+			return
 		}
-	}()
+
+		// 设置状态为 GC_ACTIVE
+		lfs.gcstate = GC_ACTIVE
+		err := lfs.cleanupDirtyRegions()
+		if err != nil {
+			lfs.gcstate = GC_INACTIVE
+			clog.Warnf("failed to compress dirty region: %s", err)
+		}
+
+		// 任务完成后设置为 GC_INACTIVE
+		lfs.gcstate = GC_INACTIVE
+	})
+
+	// 启动定时任务
+	lfs.cronJob.Start()
 }
 
+// StopRegionGC 关闭垃圾回收
 func (lfs *LogStructuredFS) StopRegionGC() {
-	if lfs.gcstate == GC_ACTIVE || lfs.gcstate == GC_INACTIVE {
-		lfs.gcdone <- struct{}{}
-		close(lfs.gcdone)
+	// 停止 cron 任务
+	if lfs.cronJob != nil {
+		lfs.cronJob.Stop()
 	}
+
+	// 如果 GC 仍在运行，等待其结束
+	for lfs.gcstate == GC_ACTIVE {
+		time.Sleep(3 * time.Second)
+	}
+
+	// 重置状态
+	lfs.gcstate = GC_INIT
+	lfs.cronJob = nil
 }
 
 // GCState returns the current garbage collection (GC) state
@@ -755,7 +750,6 @@ func crashRecoveryAllIndex(regions map[uint64]*os.File, indexs []*indexMap) erro
 					Length:    segment.Size(),
 					CreatedAt: segment.CreatedAt,
 					ExpiredAt: segment.ExpiredAt,
-					mvcc:      0,
 				}
 
 				offset += uint64(segment.Size())
@@ -1090,12 +1084,6 @@ func serializedSegment(seg *Segment) ([]byte, error) {
 // 8. If the in-memory index is used to locate records, it becomes impossible to determine if a file has been fully scanned.
 // 9. This is because records in the in-memory index may be distributed across multiple data files on disk.
 func (lfs *LogStructuredFS) cleanupDirtyRegions() error {
-	lfs.mu.Lock()
-	defer lfs.mu.Unlock()
-
-	// 修改 GC 的状态为运行状态
-	lfs.gcstate = GC_ACTIVE
-
 	if len(lfs.regions) >= 5 {
 		var regionIds []uint64
 		for v := range lfs.regions {
@@ -1196,8 +1184,8 @@ func (lfs *LogStructuredFS) cleanupDirtyRegions() error {
 }
 
 func isValid(mu *sync.RWMutex, seg *Segment, inode *INode) bool {
-	mu.Lock()
-	defer mu.Unlock()
+	mu.RLock()
+	defer mu.RUnlock()
 	return !seg.IsTombstone() &&
 		seg.CreatedAt == inode.CreatedAt &&
 		(seg.ExpiredAt == 0 || uint64(time.Now().Unix()) < seg.ExpiredAt)

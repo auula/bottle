@@ -27,7 +27,7 @@ import (
 var storage *vfs.LogStructuredFS
 
 func GetListController(ctx *gin.Context) {
-	_, seg, err := storage.FetchSegment(ctx.Param("key"))
+	seg, err := storage.FetchSegment(ctx.Param("key"))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{
 			"message": "key data not found.",
@@ -91,7 +91,7 @@ func DeleteListController(ctx *gin.Context) {
 }
 
 func GetTableController(ctx *gin.Context) {
-	_, seg, err := storage.FetchSegment(ctx.Param("key"))
+	seg, err := storage.FetchSegment(ctx.Param("key"))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{
 			"message": "key data not found.",
@@ -155,7 +155,7 @@ func DeleteTableController(ctx *gin.Context) {
 }
 
 func GetZsetController(ctx *gin.Context) {
-	_, seg, err := storage.FetchSegment(ctx.Param("key"))
+	seg, err := storage.FetchSegment(ctx.Param("key"))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{
 			"message": "key data not found.",
@@ -219,7 +219,7 @@ func DeleteZsetController(ctx *gin.Context) {
 }
 
 func GetTextController(ctx *gin.Context) {
-	_, seg, err := storage.FetchSegment(ctx.Param("key"))
+	seg, err := storage.FetchSegment(ctx.Param("key"))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{
 			"message": "key data not found.",
@@ -283,7 +283,7 @@ func DeleteTextController(ctx *gin.Context) {
 }
 
 func GetNumberController(ctx *gin.Context) {
-	_, seg, err := storage.FetchSegment(ctx.Param("key"))
+	seg, err := storage.FetchSegment(ctx.Param("key"))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{
 			"message": "key data not found.",
@@ -347,7 +347,7 @@ func DeleteNumberController(ctx *gin.Context) {
 }
 
 func GetSetController(ctx *gin.Context) {
-	_, seg, err := storage.FetchSegment(ctx.Param("key"))
+	seg, err := storage.FetchSegment(ctx.Param("key"))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{
 			"message": "key data not found.",

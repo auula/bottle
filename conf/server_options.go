@@ -20,7 +20,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v2"
@@ -42,7 +41,7 @@ const (
 		"auth": "Are we wide open to the world?",
 		"region": {
 			"enable": true,
-			"second": 18000,
+			"cron": "0 0 3 * * *",
 			"threshold": 3
 		},
 		"encryptor": {
@@ -215,8 +214,8 @@ func (opt *ServerOptions) IsRegionGCEnabled() bool {
 	return opt.Region.Enable
 }
 
-func (opt *ServerOptions) RegionGCInterval() time.Duration {
-	return time.Duration(opt.Region.Second) * time.Second
+func (opt *ServerOptions) RegionGCInterval() string {
+	return opt.Region.Schedule
 }
 
 func (opt *ServerOptions) Secret() []byte {
@@ -241,9 +240,9 @@ type ServerOptions struct {
 }
 
 type Region struct {
-	Enable    bool  `json:"enable"`
-	Second    int64 `json:"second"`
-	Threshold uint8 `json:"threshold"`
+	Enable    bool   `json:"enable"`
+	Schedule  string `json:"cron"`
+	Threshold uint8  `json:"threshold"`
 }
 
 type Encryptor struct {

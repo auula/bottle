@@ -202,7 +202,7 @@ func TestVFSWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, seg, err = fss.FetchSegment("key-01")
+	seg, err = fss.FetchSegment("key-01")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func BenchmarkVFSReads(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key-%d", i)
-		_, _, err := fss.FetchSegment(key)
+		_, err := fss.FetchSegment(key)
 		if err != nil {
 			b.Logf("%v", err)
 		}
@@ -346,7 +346,7 @@ func TestUpdateSegmentWithCAS_Concurrent(t *testing.T) {
 			defer wg.Done()
 
 			// 1. 获取当前版本号
-			version, _, err := fss.FetchSegment(key)
+			_, err := fss.FetchSegment(key)
 			if err != nil {
 				t.Errorf("goroutine %d: failed to fetch segment: %v", id, err)
 				return
@@ -360,13 +360,13 @@ func TestUpdateSegmentWithCAS_Concurrent(t *testing.T) {
 			}
 
 			// 3. CAS 更新
-			err = fss.UpdateSegmentWithCAS(key, version, newseg)
+			err = fss.UpdateSegment(key, newseg)
 			if err != nil {
 				atomic.AddInt32(&failures, 1)
-				t.Logf("goroutine %d: CAS update failed (expected version: %d)", id, version)
+				t.Logf("goroutine %d: CAS update failed", id)
 			} else {
 				atomic.AddInt32(&success, 1)
-				t.Logf("goroutine %d: CAS update succeeded (version: %d)", id, version)
+				t.Logf("goroutine %d: CAS update succeeded", id)
 			}
 		}(i)
 	}
@@ -429,7 +429,7 @@ func TestConcurrentPutAndFetchSegment(t *testing.T) {
 			k := fmt.Sprintf("key-%d", id)
 
 			// 获取 segment
-			_, seg, err := fss.FetchSegment(k)
+			seg, err := fss.FetchSegment(k)
 			if err != nil {
 				t.Errorf("failed to fetch segment for key: %s \t %v", k, err)
 				return
@@ -494,7 +494,7 @@ func TestVFSOpertions(t *testing.T) {
 	err = fss.DeleteSegment("key-01")
 	assert.NoError(t, err)
 
-	_, _, err = fss.FetchSegment("key-01")
+	_, err = fss.FetchSegment("key-01")
 	assert.Equal(t, err.Error(), "inode index for 9171687345308829835 not found")
 
 	err = fss.ExportSnapshotIndex()
